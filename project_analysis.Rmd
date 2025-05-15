@@ -1,0 +1,2474 @@
+---
+title: "Evaluation of the impacts of regeneration on soil carbon and biodiversity in the Scottish Highlands"
+output: html_document
+date: "2025-03-2"
+---
+
+# Install Packages
+
+```{r}
+#library(nlme)
+#library(ggplot2)
+#library(dplyr)
+#library(broom)
+#library(purrr)
+#library(tidyr)
+#library(readxl)
+#library(RColorBrewer)
+#library(gridExtra)
+#library(vegan)
+#library(patchwork)
+#library(cowplot)
+#library(grid)
+#library(lme4)
+#library(plotly)
+#library(MuMIn)
+#library(lmerTest)
+#library(arm)
+#library(sjPlot)
+#library(indicspecies)
+#library(stringr)
+```
+
+
+# Load Packages
+
+```{r}
+library(nlme)
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(purrr)
+library(tidyr)
+library(readxl)
+library(RColorBrewer)
+library(gridExtra)
+library(vegan)
+library(patchwork)
+library(cowplot)
+library(grid)
+library(lme4)
+library(plotly)
+library(MuMIn)
+library(lmerTest)
+library(arm)
+library(sjPlot)
+library(indicspecies)
+library(stringr)
+```
+
+# Functions
+
+```{r}
+save_plot <- function(plot_obj, file_name, width = 8, height = 6, dpi = 300, format = "png", plot_title = NULL) {
+  format <- tolower(format)
+
+  # Update plot title if provided
+  if (!is.null(plot_title)) {
+    plot_obj <- plot_obj + ggtitle(plot_title)
+  }
+
+  # Choose graphics device
+  if (format == "png") {
+    png(paste0(file_name, ".png"), width = width, height = height, units = "in", res = dpi)
+  } else if (format == "pdf") {
+    pdf(paste0(file_name, ".pdf"), width = width, height = height)
+  } else if (format == "jpeg") {
+    jpeg(paste0(file_name, ".jpeg"), width = width, height = height, units = "in", res = dpi)
+  } else {
+    stop("Unsupported file format")
+  }
+
+  # Print and close
+  print(plot_obj)
+  dev.off()
+}
+
+
+
+make_seedling_plot <- function(data, group_label, color_line = "steelblue", color_point = "steelblue4", custom_title = NULL) {
+  
+  # Fit model
+  model <- lme(fixed = sum_seedlings ~ Carbon_tonne_ha, 
+               random = ~ 1 | Site, 
+               data = data)
+  
+  # Summary stats
+  model_summary <- summary(model)
+  p_val <- model_summary$tTable["Carbon_tonne_ha", "p-value"]
+  slope <- model_summary$tTable["Carbon_tonne_ha", "Value"]
+  
+  r2_vals <- r.squaredGLMM(model)
+  r2_marginal <- r2_vals[1]
+  r2_conditional <- r2_vals[2]
+  
+  label_text <- paste0(
+    "beta = ", round(slope, 3), "\n",
+    "R2[m] = ", round(r2_marginal, 3), "\n",
+    "R2[c] = ", round(r2_conditional, 3), "\n",
+    "p = ", signif(p_val, 3)
+  )
+  
+  # Plot
+  graph <- plot_model(model, type = "pred", colors = color_line) +
+    geom_point(data = data, aes(x = Carbon_tonne_ha, y = sum_seedlings), 
+               color = color_point, size = 1.5) +
+    labs(
+      x = "Carbon (tonne/ha)",
+      y = "Total Seedlings",
+      title = ifelse(is.null(custom_title), paste("Seedling Abundance vs topsoil SOC (", group_label, ")", sep = ""), custom_title)
+    ) +
+    annotate("text", x = Inf, y = Inf, label = label_text, 
+             hjust = 1.1, vjust = 1.5, size = 4, family = "mono") +
+    theme_bw() +
+    theme(
+      )
+    
+  
+  return(graph)
+}
+```
+
+# Import Data
+
+```{r}
+carbon_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 10)
+
+overview_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 2)
+
+
+seedling_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 6)
+
+depth_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 9)
+
+plant_com_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 3)
+
+pitfall_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 8)
+
+soil_invert_dataset <- read_excel("/cloud/project/Remnant soil communities - data - Mallie - Loyne - Cluanie + inverts + carbon.xlsx", sheet = 11)
+
+```
+
+# Process Data
+
+```{r}
+#Mutate overview dataset to convert "Unforested (heath)",  "Unforested (heathland)", "Unforested (heath)" and "Unforested (remnant_scat)" to "Unforested (remnant)"
+
+overview_dataset <- overview_dataset %>%
+  mutate(Type = ifelse(Type %in% c("Unforested (heath)", "Unforested (heathland)"), "Unforested (heath)", Type)) %>%
+  mutate(Type = ifelse(Type %in% c("Unforested (remnant_scat)"), "Unforested (remnant)", Type))
+
+carbon_dataset <- merge(carbon_dataset, overview_dataset, by = "Plot")
+
+plant_com_dataset <- merge(plant_com_dataset, overview_dataset, by = "Plot")
+
+
+plant_com_dataset <- plant_com_dataset %>%
+  mutate(Species = str_replace(Species, "Clubmoss", "Club moss"))
+
+# Subset the data set to include only relevant information:
+
+carbon_dataset <- carbon_dataset[, c("Site", "Plot","Layer" ,"Type", "Carbon (tonne/ha)")]
+
+carbon_dataset <- carbon_dataset %>%
+  rename(Carbon_tonne_ha = `Carbon (tonne/ha)`)
+
+
+# Subset the data set to include only relevant information:
+
+carbon_dataset <- carbon_dataset[, c("Site", "Plot","Layer" ,"Type", "Carbon_tonne_ha")]
+
+
+sum_seedlings <- seedling_dataset %>%
+  group_by(Plot) %>%
+  summarise(sum_seedlings = sum(Frequency), na.rm = TRUE)
+
+est_seedlings <- seedling_dataset %>%
+  filter(Height_category %in% c("100-150", ">150", "50-100"))
+
+est_seedlings <- est_seedlings %>%
+  group_by(Plot) %>%             # Group by Plot
+  summarise(Total_Seedlings = sum(Frequency, na.rm = TRUE))
+
+est_seedlings$sum_seedlings <- NULL                      # Remove the column
+names(est_seedlings)[names(est_seedlings) == "Total_Seedlings"] <- "sum_seedlings"  # Rename
+
+carbon_dataset <- carbon_dataset %>%
+  filter(`Carbon_tonne_ha` != 0)
+
+# First, get the plots with 0-10, O
+o_samples <- carbon_dataset %>%
+  filter(Layer == "0-10, O")
+
+# Then, get the plots with 0-10, M, but only those that do not have 0-10, O
+m_samples <- carbon_dataset %>%
+  filter(Layer == "0-10, M") %>%
+  anti_join(o_samples, by = "Plot")  # Exclude plots that have 0-10, O
+
+# Combine both datasets (0-10, O + the filtered 0-10, M)
+upper10_data <- bind_rows(o_samples, m_samples)
+
+upper10_seedlings <- merge(upper10_data, sum_seedlings, by = "Plot")
+
+upper10_est_seedlings <- merge(upper10_data, est_seedlings, by = "Plot")
+
+regen_upper10 <- upper10_seedlings[upper10_seedlings$Type == "Regen", ]
+
+regen_upper10_est <- upper10_est_seedlings[upper10_est_seedlings$Type == "Regen", ]
+
+carbon_0_20 <- carbon_dataset %>% 
+  # Create a new layer that combines "0-10, O" and "10-20, O"
+  mutate(Layer_combined = case_when(
+    Layer == "0-10, O" ~ "0-20, O",
+    Layer == "10-20, O" ~ "0-20, O",
+    TRUE ~ Layer # Keep other layers unchanged
+  )) %>%
+  # Now group by the combined layer and other factors (Type, Site)
+  group_by(Plot, Type, Layer_combined, Site) %>%
+  summarise(
+    Total_Carbon_Stock = sum(Carbon_tonne_ha) # Upper bound of 95% CI
+  )
+
+
+plant_com_dataset <- plant_com_dataset %>%
+  mutate(DOMIN = case_when(
+    DOMIN == 1 ~ 1,
+    DOMIN == 2 ~ 2,
+    DOMIN == 3 ~ 3,
+    DOMIN == 4 ~ 7,
+    DOMIN == 5 ~ 18,
+    DOMIN == 6 ~ 29.5,
+    DOMIN == 7 ~ 42,
+    DOMIN == 8 ~ 63,
+    DOMIN == 9 ~ 83,
+    DOMIN == 10 ~ 95.5  # For any values outside 1-10
+  ))
+
+plant_com_dataset <- plant_com_dataset[c("Plot", "Site.y", "Species", "DOMIN", "Type")]
+
+plant_rich <- plant_com_dataset %>%
+  group_by(Plot) %>%
+  summarise(Richness = sum(DOMIN > 0))
+
+plant_rich <- merge(plant_rich, overview_dataset, by = "Plot")
+
+# Calculate Simpson's Diversity Index for each plot
+plant_div <- plant_com_dataset %>%
+  group_by(Plot) %>%
+  # Calculate total abundance for each plot
+  mutate(Total_DOMIN = sum(DOMIN)) %>%
+  # Calculate relative abundance for each species
+  mutate(Relative_DOMIN = DOMIN / Total_DOMIN) %>%
+  # Calculate Simpson's D (sum of squared relative abundances)
+  summarise(Simpsons_D = sum(Relative_DOMIN^2, na.rm = TRUE)) %>%
+  # Calculate Simpson's Diversity Index (1 - D)
+  mutate(Diversity_Index = 1 - Simpsons_D)
+
+plant_div <- merge(plant_div, overview_dataset, by = "Plot")
+
+
+soil_invert_dataset <- merge(soil_invert_dataset, overview_dataset, by = "Plot")
+
+soil_invert_dataset <- soil_invert_dataset[c("Plot", "Site.y", "Order", "Abundance", "Type")]
+
+soil_invert_rich <- soil_invert_dataset %>%
+  group_by(Plot) %>%
+  summarise(Richness = sum(Abundance > 0))
+
+soil_invert_rich <- merge(soil_invert_rich, overview_dataset, by = "Plot")
+
+# Calculate Simpson's Diversity Index for each plot
+soil_invert_div <- soil_invert_dataset %>%
+  group_by(Plot) %>%
+  # Calculate total abundance for each plot
+  mutate(Total_Abundance = sum(Abundance)) %>%
+  # Calculate relative abundance for each species
+  mutate(Relative_Abundance = Abundance / Total_Abundance) %>%
+  # Calculate Simpson's D (sum of squared relative abundances)
+  summarise(Simpsons_D = sum(Relative_Abundance^2, na.rm = TRUE)) %>%
+  # Calculate Simpson's Diversity Index (1 - D)
+  mutate(Diversity_Index = 1 - Simpsons_D)
+
+soil_invert_div <- merge(soil_invert_div, overview_dataset, by = "Plot")
+
+pitfall_dataset <- merge(pitfall_dataset, overview_dataset, by = "Plot")
+
+pitfall_dataset <- pitfall_dataset[c("Plot", "Site.y", "Order", "Abundance", "Type")]
+
+pitfall_rich <- pitfall_dataset %>%
+  group_by(Plot) %>%
+  summarise(Richness = sum(Abundance > 0))
+
+pitfall_rich <- pitfall_rich %>%
+  filter(Richness > 0)
+
+pitfall_rich <- merge(pitfall_rich, overview_dataset, by = "Plot")
+
+# Calculate Simpson's Diversity Index for each plot
+pitfall_div <- pitfall_dataset %>%
+  group_by(Plot) %>%
+  # Calculate total abundance for each plot
+  mutate(Total_Abundance = sum(Abundance)) %>%
+  # Calculate relative abundance for each species
+  mutate(Relative_Abundance = Abundance / Total_Abundance) %>%
+  # Calculate Simpson's D (sum of squared relative abundances)
+  summarise(Simpsons_D = sum(Relative_Abundance^2, na.rm = TRUE)) %>%
+  # Calculate Simpson's Diversity Index (1 - D)
+  mutate(Diversity_Index = 1 - Simpsons_D)
+
+pitfall_div <- merge(pitfall_div, overview_dataset, by = "Plot")
+
+pitfall_div <- pitfall_div[pitfall_div$Diversity_Index != 0, ]
+
+```
+
+# Model Evaluation:
+
+## Soil Carbon/Woodland Type Model - Non-Normal residuals
+
+```{r}
+### Soil Carbon/Woodland Type Model - Normal residuals
+
+###############################################################################################
+
+# Soil Carbon/Woodland Type Model:
+
+soil_carbon_model <- lme(fixed = Total_Carbon_Stock ~ Type * Layer_combined, 
+                         random = ~ 1 | Site,  # Random intercepts and slopes for Type within Site
+                         data = carbon_0_20, 
+                         control = lmeControl(maxIter = 100, msMaxIter = 100, opt = "optim"))
+
+
+# Soil Carbon Model R-squared:
+
+soil_carbon_r_squared <- r.squaredGLMM(soil_carbon_model)
+
+# Post-Hoc Results:
+
+summary(soil_carbon_model)
+print(soil_carbon_r_squared)
+
+###############################################################################################
+
+# Soil Carbon/Woodland Type Model Residuals Normal Fit
+
+residuals <- residuals(soil_carbon_model)
+
+# Histogram to visualize residuals
+hist(residuals, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black", breaks = 20)
+
+# Q-Q plot to check for normality
+qqnorm(residuals)
+qqline(residuals)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals)
+
+###############################################################################################
+```
+
+## Seedling/Soil Carbon Model - Normal residuals
+
+```{r}
+###############################################################################################
+
+
+# Seedling/Soil Carbon Model:
+
+upper10_seedling_model <- lme(fixed = sum_seedlings ~ Carbon_tonne_ha, 
+                         random = ~ 1 | Site, 
+                         data = regen_upper10)
+
+upper10_est_seedling_model <- lme(fixed = sum_seedlings ~ Carbon_tonne_ha, 
+                         random = ~ 1 | Site, 
+                         data = regen_upper10_est)
+
+# Seedling/Soil Carbon R-squared:
+
+upper10_seedling_r_squared <- r.squaredGLMM(upper10_seedling_model)
+
+upper10_est_seedling_r_squared <- r.squaredGLMM(upper10_est_seedling_model)
+
+
+# Post-Hoc Results
+
+summary(upper10_seedling_model)
+print(upper10_seedling_r_squared)
+
+summary(upper10_est_seedling_model)
+print(upper10_est_seedling_r_squared)
+
+###############################################################################################
+
+# Seedling/Soil Carbon Model Residuals Normal Fit
+
+residuals_upper10_seedlings <- residuals(upper10_seedling_model)
+
+residuals_upper10_est_seedlings <- residuals(upper10_est_seedling_model)
+
+
+# Histogram to visualize residuals
+hist(residuals_upper10_seedlings, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Histogram to visualize residuals
+hist(residuals_upper10_est_seedlings, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_upper10_seedlings)
+qqline(residuals_upper10_seedlings)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_upper10_seedlings)
+
+
+# Q-Q plot to check for normality
+qqnorm(residuals_upper10_est_seedlings)
+qqline(residuals_upper10_est_seedlings)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_upper10_est_seedlings)
+
+###############################################################################################
+
+```
+
+## Plant Diversity Model - Non-Normal residuals
+
+```{r}
+
+###############################################################################################
+
+# Plant Diversity Model
+
+diversity_model <- lme(fixed = Diversity_Index ~ Type, 
+                         random = ~ 1 | Site, 
+                         data = plant_div,
+                       control = lmeControl(maxIter = 100, msMaxIter = 100, opt = "optim"))
+
+
+# Plant Diversity Model R-squared:
+
+plant_diversity_r_squared <- r.squaredGLMM(diversity_model)
+
+
+summary(diversity_model)
+print(plant_diversity_r_squared)
+
+###############################################################################################
+
+# Plant Diversity Model Residuals Normal Fit
+
+residuals_plant_diversity <- residuals(diversity_model)
+
+# Histogram to visualize residuals
+hist(residuals_plant_diversity, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_plant_diversity)
+qqline(residuals_plant_diversity)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_plant_diversity)
+
+###############################################################################################
+
+```
+
+## Plant Richness Model - Not normal residuals
+
+```{r}
+
+# Mixed model (if it fits)
+richness_model_lme <- glmer(Richness ~ Type + (1 | Site), data = plant_rich, family = poisson)
+
+
+# Fixed model
+richness_model_lm <- lm(Richness ~ Type, data = plant_rich)
+
+# Compare (will likely show negligible gain in model fit)
+anova(richness_model_lme, richness_model_lm)
+
+
+richness_model_lm <- glm(Richness ~ Type, data = plant_rich, family = poisson())
+
+deviance <- deviance(richness_model_lm)
+df_resid <- df.residual(richness_model_lm)
+dispersion_ratio <- deviance / df_resid
+dispersion_ratio
+
+
+###############################################################################################
+
+# Plant Richness Model
+
+richness_model <- glm(Richness ~ Type, data = plant_rich, family = poisson())
+
+# Plant Diversity Model R-squared:
+
+plant_richness_r_squared <- r.squaredGLMM(richness_model)
+
+
+summary(richness_model)
+print(plant_richness_r_squared)
+
+###############################################################################################
+
+# Plant Diversity Model Residuals Normal Fit
+
+residuals_plant_richness <- residuals(richness_model)
+
+# Histogram to visualize residuals
+hist(residuals_plant_richness, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_plant_richness)
+qqline(residuals_plant_richness)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_plant_richness)
+
+###############################################################################################
+
+```
+## Soil Invertebrate Diversity Model - Normal Residuals
+
+```{r}
+
+###############################################################################################
+
+# Soil Invertebrate Diversity Model
+
+soil_invert_diversity_model <- lme(fixed = Diversity_Index ~ Type, 
+                         random = ~ 1 | Site, 
+                         data = soil_invert_div,
+                         , 
+                         control = lmeControl(maxIter = 100, msMaxIter = 100, opt = "optim"))
+
+# Soil Invertebrate Diversity Model R-squared:
+
+soil_invert_diversity_r_squared <- r.squaredGLMM(soil_invert_diversity_model)
+
+
+summary(soil_invert_diversity_model)
+print(soil_invert_diversity_r_squared)
+
+###############################################################################################
+
+# Soil Invertebrate Diversity Model Residuals Normal Fit
+
+residuals_soil_invert_diversity <- residuals(soil_invert_diversity_model)
+
+# Histogram to visualize residuals
+hist(residuals_soil_invert_diversity, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_soil_invert_diversity)
+qqline(residuals_soil_invert_diversity)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_soil_invert_diversity)
+
+###############################################################################################
+
+```
+
+## Soil Invertebrate Richness Model - Not normal residuals
+
+```{r}
+
+# Mixed model (if it fits)
+soil_richness_invert_model_lme <- glmer(Richness ~ Type + (1 | Site), data = soil_invert_rich, family = poisson)
+
+
+soil_invert_richness_model_lm <- glm(Richness ~ Type, 
+                                      data = soil_invert_rich, 
+                                      family = poisson)
+
+# Compare (will likely show negligible gain in model fit)
+anova(soil_richness_invert_model_lme, soil_invert_richness_model_lm)
+
+deviance <- deviance(soil_invert_richness_model_lm)
+df_resid <- df.residual(soil_invert_richness_model_lm)
+dispersion_ratio <- deviance / df_resid
+dispersion_ratio
+
+
+###############################################################################################
+
+# Soil Invertebrate Richness Model
+
+soil_invert_richness_model <- glm(Richness ~ Type, 
+                                      data = soil_invert_rich, 
+                                      family = poisson)
+
+# Soil Invertebrate Richness Model R-squared:
+
+soil_invert_richness_r_squared <- r.squaredGLMM(soil_invert_richness_model)
+
+
+summary(soil_invert_richness_model)
+print(soil_invert_richness_r_squared)
+
+###############################################################################################
+
+# Soil Invertebrate Richness Model Residuals Normal Fit
+
+residuals_soil_invert_richness <- residuals(soil_invert_richness_model)
+
+# Histogram to visualize residuals
+hist(residuals_soil_invert_richness, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_soil_invert_richness)
+qqline(residuals_soil_invert_richness)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_soil_invert_richness)
+
+###############################################################################################
+
+```
+
+## Pitfall Invertebrate Diversity Model - Not Normal residuals
+
+```{r}
+
+###############################################################################################
+
+# Pitfall Invertebrate Diversity Model
+
+pitfall_diversity_model <- lme(fixed = Diversity_Index ~ Type, 
+                         random = ~ 1 | Site, 
+                         data = pitfall_div,
+                         , 
+                         control = lmeControl(maxIter = 100, msMaxIter = 100, opt = "optim"))
+
+
+
+# Soil Invertebrate Diversity Model R-squared:
+
+pitfall_invert_diversity_r_squared <- r.squaredGLMM(pitfall_diversity_model)
+
+
+summary(pitfall_diversity_model)
+print(pitfall_invert_diversity_r_squared)
+
+###############################################################################################
+
+# Soil Invertebrate Diversity Model Residuals Normal Fit
+
+residuals_pitfall_invert_diversity <- residuals(pitfall_diversity_model)
+
+# Histogram to visualize residuals
+hist(residuals_pitfall_invert_diversity, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_pitfall_invert_diversity)
+qqline(residuals_pitfall_invert_diversity)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_pitfall_invert_diversity)
+
+###############################################################################################
+
+```
+
+## Pitfall Invertebrate Richness Model - Normal Residuals
+
+```{r}
+
+###############################################################################################
+
+# Pitfall Invertebrate Richness Model
+
+pitfall_richness_model <- glmer(Richness ~ Type + 
+                         (1 | Site),
+                         family = poisson(),
+                         data = pitfall_rich)
+
+# Soil Invertebrate Richness Model R-squared:
+
+pitfall_invert_richness_r_squared <- r.squaredGLMM(pitfall_richness_model)
+
+
+summary(pitfall_richness_model)
+print(pitfall_invert_richness_r_squared)
+
+###############################################################################################
+
+# Soil Invertebrate Richness Model Residuals Normal Fit
+
+residuals_pitfall_invert_richness <- residuals(pitfall_richness_model)
+
+# Histogram to visualize residuals
+hist(residuals_pitfall_invert_richness, main = "Residuals Distribution", xlab = "Residuals", col = "lightblue", border = "black")
+
+# Q-Q plot to check for normality
+qqnorm(residuals_pitfall_invert_richness)
+qqline(residuals_pitfall_invert_richness)
+
+# Shapiro-Wilk normality test
+shapiro.test(residuals_pitfall_invert_richness)
+
+###############################################################################################
+```
+
+# Analysis:
+
+## Soil Carbon:
+
+### Extracting model predicted estimates:
+
+```{r}
+library(nlme)
+
+# Subset the data for Organic Soil (Layer_combined == '0-20, O')
+organic_data <- carbon_0_20[carbon_0_20$Layer_combined == "0-20, O", ]
+
+# Subset the data for Mineral Soil (Layer_combined == '0-10, M')
+mineral_data <- carbon_0_20[carbon_0_20$Layer_combined == "0-10, M", ]
+
+library(nlme)
+
+organic_model <- lme(
+  Total_Carbon_Stock ~ Type,
+  random = ~ 1 | Site,
+  data = organic_data
+)
+
+mineral_model <- lme(
+  Total_Carbon_Stock ~ Type,
+  random = ~ 1 | Site,
+  data = mineral_data
+)
+
+
+organic_confints <- intervals(organic_model, level = 0.95)$fixed
+mineral_confints <- intervals(mineral_model, which = "fixed", level = 0.95)
+
+mineral_fixed <- mineral_confints$fixed
+
+# Step 1: Get the intercept from the organic and mineral models
+organic_intercept <- organic_confints["(Intercept)", "est."]
+mineral_intercept <- mineral_fixed["(Intercept)", "est."]  # or "Estimate" depending on version
+
+# Step 2: Add the intercept to other treatment-level estimates
+organic_adjusted <- organic_confints
+organic_adjusted[-1, ] <- organic_adjusted[-1, ] + organic_intercept  # Skip the intercept row
+
+# Adjust the rest
+mineral_adjusted <- mineral_fixed
+mineral_adjusted[rownames(mineral_adjusted) != "(Intercept)", ] <-
+  mineral_adjusted[rownames(mineral_adjusted) != "(Intercept)", ] + mineral_intercept
+
+mineral_adjusted
+
+# Step 3: Rebuild the cleaned-up dataframes
+
+organic_df <- data.frame(
+  Type = c("Mature", "Regen", "Unforested (heath)", "Unforested (remnant)"),
+  Soil_Type = "Organic",
+  Lower = organic_adjusted[, "lower"],
+  Estimate = organic_adjusted[, "est."],
+  Upper = organic_adjusted[, "upper"]
+)
+
+mineral_df <- data.frame(
+  Type = c("Mature", "Regen", "Unforested (heath)", "Unforested (remnant)"),
+  Soil_Type = "Mineral",
+  Lower = mineral_adjusted[, "lower"],
+  Estimate = mineral_adjusted[, "est."],
+  Upper = mineral_adjusted[, "upper"]
+)
+
+# Combine
+combined_df <- rbind(organic_df, mineral_df)
+
+```
+
+
+```{r}
+library(dplyr)
+
+# Sort just to be safe
+stacked_df <- combined_df %>%
+  arrange(Type, Soil_Type) %>%
+  mutate(
+    Soil_Type = factor(Soil_Type, levels = c("Organic", "Mineral"))
+  ) %>%
+  group_by(Type) %>%
+  arrange(Soil_Type, .by_group = TRUE) %>%
+  mutate(
+    ymin = ifelse(Soil_Type == "Organic", 0, lag(Estimate)),
+    ymax = ymin + Estimate,
+    
+    # For error bars
+    error_lower = ifelse(Soil_Type == "Organic", Lower, lag(Estimate) + Lower),
+    error_upper = ifelse(Soil_Type == "Organic", Upper, lag(Estimate) + Upper)
+  )
+
+
+# Reorder the Soil_Type factor levels
+stacked_df$Soil_Type <- factor(stacked_df$Soil_Type, levels = c("Mineral", "Organic"))  # Change order here
+
+stacked_df
+
+organic_estimates <- stacked_df %>%
+  dplyr::filter(Soil_Type == "Organic") %>%  # Filter only organic estimates
+  dplyr::select(Type, Estimate)  # Select Type and Estimate columns
+
+# View the organic estimates
+print(organic_estimates)
+
+# Join the organic estimates with the raw carbon data
+carbon_0_20_adjusted <- carbon_0_20 %>%
+  left_join(organic_estimates, by = "Type")  # Join by 'Type' (treatment)
+
+# View the adjusted data to confirm the join
+head(carbon_0_20_adjusted)
+
+# Adjust the mineral carbon stock values by adding the organic estimate
+carbon_0_20_adjusted <- carbon_0_20_adjusted %>%
+  mutate(
+    Total_Carbon_Stock_adjusted = ifelse(
+      Layer_combined == 'Mineral',  # If it's mineral soil
+      Total_Carbon_Stock + Estimate,  # Add the organic estimate
+      Total_Carbon_Stock  # Keep the original carbon stock for organic soil
+    )
+  )
+
+# View the adjusted data
+head(carbon_0_20_adjusted)
+
+# Recode the 'Layer_combined' column to use 'Mineral' and 'Organic'
+carbon_0_20_adjusted <- carbon_0_20_adjusted %>%
+  mutate(
+    Layer_combined = recode(Layer_combined, 
+                            '0-10, M' = 'Mineral',  # Change '0-10, M' to 'Mineral'
+                            '0-20, O' = 'Organic')   # Optionally, recode 'Organic' if needed
+  )
+
+```
+### Plotting soil carbon stock
+
+```{r}
+stacked_df$Treatment_Layer <- paste(stacked_df$Type, stacked_df$Soil_Type, sep = " / ")
+carbon_0_20_adjusted$Treatment_Layer <- paste(carbon_0_20_adjusted$Type, carbon_0_20_adjusted$Layer_combined, sep = " / ")
+
+
+library(colorspace)
+palette.colors()
+
+# Base woodland treatment colors
+woodland_base <- c(
+  "Mature" = "#D55E00", 
+  "Regen" = "#009E73", 
+  "Unforested (heath)" = "#56B4E9", 
+  "Unforested (remnant)" = "#CC79A7"
+)
+
+# Build combined color palette
+layer_colors <- c()
+for (type in names(woodland_base)) {
+  layer_colors[paste0(type, " / Organic")] <- woodland_base[type]
+  layer_colors[paste0(type, " / Mineral")] <- darken(woodland_base[type], amount = 0.2)
+}
+library(ggplot2)
+
+soil_woodland_graph <- ggplot(stacked_df, aes(x = Type, y = Estimate, fill = Treatment_Layer)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.5, width = 0.6, alpha = 0.7) +
+  geom_errorbar(aes(ymin = error_lower, ymax = error_upper),
+                position = "identity", width = 0.3, color = "black", size = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  scale_y_reverse() +
+  scale_shape_manual(values = c("Organic" = 21, "Mineral" = 24)) +
+  scale_fill_manual(values = layer_colors) +
+  guides(
+    fill = guide_legend(override.aes = list(shape = c(21, 24)), reverse = TRUE),
+    shape = "none"  # Hide the separate shape legend
+  ) +
+  theme_bw() +
+  theme(
+  axis.text.x = element_text(angle = 45, hjust = 1),  # <-- added line
+  strip.background = element_rect(fill = "grey", color = "black", size = 1),
+  strip.text = element_text(color = "black", size = 12),
+  panel.spacing = unit(1, "lines"),
+  panel.background = element_rect(fill = "white", color = "black"),
+  plot.margin = margin(10, 10, 10, 10)
+) +
+  labs(
+    x = "Treatment Type",
+    y = "Carbon Stock (tonne/ha)",
+    fill = "Forest Treatment / Soil Layer",
+    title = "Stacked Organic & Mineral Soil Carbon by Treatment"
+  ) +
+  geom_jitter(data = carbon_0_20_adjusted, 
+              aes(x = Type,
+                  y = ifelse(Layer_combined == 'Mineral', 
+                             Total_Carbon_Stock_adjusted, 
+                             Total_Carbon_Stock),
+                  fill = Treatment_Layer,
+                  shape = Layer_combined),
+              width = 0.15, 
+              height = 0, 
+              size = 1.5, 
+              color = "black", 
+              stroke = 0.8, 
+              alpha = 0.5)
+
+
+soil_woodland_graph
+
+save_plot(soil_woodland_graph, "soil_carbon_graph", plot_title = "Carbon stock by Forest Treatment")
+
+
+```
+### Plotting Organic Depth Horizon
+
+```{r}
+# Modify the O_layer_depth column
+depth_dataset <- depth_dataset %>%
+  mutate(
+    O_layer_depth = case_when(
+      O_layer_depth == ">20" ~ 25,        # Replace ">20" with 25
+      O_layer_depth == "(=20)" ~ 20,      # Replace "(=20)" with 20
+      TRUE ~ as.numeric(O_layer_depth)   # Convert remaining values to numeric
+    )
+  ) %>%
+  filter(!is.na(O_layer_depth))  # Remove rows where O_layer_depth is NA
+
+depth_dataset <- depth_dataset[, c("Plot", "O_layer_depth", "Site")]
+
+depth_dataset <- merge(depth_dataset, overview_dataset, by = c("Plot", "Site"))
+
+depth_dataset <- depth_dataset[, c("Plot", "O_layer_depth", "Type", "Site")]
+
+average_depth_results <- depth_dataset %>%
+  group_by(Type, Site) %>%
+  summarise(
+    Average_O_layer_depth = mean(O_layer_depth, na.rm = TRUE),  # Mean depth
+    SE_O_layer_depth = sd(O_layer_depth, na.rm = TRUE) / sqrt(n()),  # Standard Error
+    Lower_CI_depth = Average_O_layer_depth - 1.96 * SE_O_layer_depth,  # Lower 95% CI
+    Upper_CI_depth = Average_O_layer_depth + 1.96 * SE_O_layer_depth   # Upper 95% CI
+  )
+
+average_plot_depth <- depth_dataset %>%
+  group_by(Plot, Type, Site) %>%
+  summarise(
+    Plot_O_layer_depth = mean(O_layer_depth, na.rm = TRUE))
+
+woodland_base <- c(
+  "Mature" = "#D55E00", 
+  "Regen" = "#009E73", 
+  "Unforested (heath)" = "#56B4E9", 
+  "Unforested (remnant)" = "#CC79A7"
+)
+
+depth_graph <- ggplot(average_depth_results, aes(x = Type, y = Average_O_layer_depth, fill = Type)) + 
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.5, width = 0.6, alpha = 0.7) +
+  scale_fill_manual(name = "Forest Treatment",
+                    values = c(
+  "Mature" = "#D55E00", 
+  "Regen" = "#009E73", 
+  "Unforested (heath)" = "#56B4E9", 
+  "Unforested (remnant)" = "#CC79A7"
+  )) +
+  geom_errorbar(data = average_depth_results, 
+                aes(ymin = Lower_CI_depth, ymax = Upper_CI_depth, x = Type), 
+                width = 0.2, color = "black", size = 0.5) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  scale_y_reverse() +
+  theme_minimal() +  # Use a minimal theme with a white background
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),  # Grey background for facet labels
+    strip.text = element_text(color = "black", size = 12),  # Text color inside the grey box
+    panel.spacing = unit(1, "lines"),  # Add spacing between panels if needed
+    panel.background = element_rect(fill = "white", color = "black"),  # Apply white background with black border to panels
+    plot.margin = margin(10, 10, 10, 10) # Add margins around the plot if necessary
+  ) +# Reverse y-axis for better visibility
+  labs(
+    x = "Forest Treatment",  # Custom x-axis label
+    y = "Organic Layer Depth (cm)",  # Custom y-axis label
+    fill = "Soil Layer",  # Custom legend title
+    title = "Organic Horizon Depth across Sites"  # Overall title
+  ) +  # Create facets based on 'Site'
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~Site)
+
+depth_graph
+
+save_plot(depth_graph, "depth_graph")
+
+# Perform one-way ANOVA for each site
+anova_results <- depth_dataset %>%
+  do({
+    model <- aov(O_layer_depth ~ Type, data = .)  # Perform ANOVA within each site
+    tidy(model)  # Use the tidy() function from broom to get results in a nice format
+  })
+
+# View the results of the ANOVA for each site
+anova_results
+
+
+
+# Perform Tukey's HSD test for each site where ANOVA was significant
+tukey_results <- depth_dataset %>%
+  group_by(Site) %>%
+  do({
+    model <- aov(O_layer_depth ~ Type, data = .)  # Fit the ANOVA model
+    tukey <- TukeyHSD(model)  # Perform Tukey's HSD post-hoc test
+    tidy(tukey)  # Get results in a tidy format
+  })
+
+# View Tukey HSD results for each site
+tukey_results
+
+```
+
+## Seedling Establishmet on soil carbon:
+
+### Extracting and plotting model predicted data:
+
+```{r}
+
+regen_upper10_graph    <- make_seedling_plot(regen_upper10, "Regenerating", color_line = "#009E73", color_point = "black", custom_title = "Total Seedlings vs Topsoil SOC")
+
+
+
+regen_upper10_est_graph    <- make_seedling_plot(regen_upper10_est, "Regenerating", color_line = "#009E73", color_point = "black", custom_title = "Established Seedlings vs Topsoil SOC")
+
+
+
+combined_regen_graph <- regen_upper10_graph / regen_upper10_est_graph
+
+combined_regen_graph
+
+save_plot(combined_regen_graph, "seedling_regen_graph")
+
+```
+
+## Plant Diversity:
+
+### Extracting model predicted data
+
+```{r}
+predicted_plant_div_with_ci <- intervals(diversity_model, level = 0.95)
+
+# Extract just the fixed effects into a data frame
+plant_div_ci_df <- as.data.frame(predicted_plant_div_with_ci$fixed)
+
+# Optionally, name the columns
+colnames(plant_div_ci_df) <- c("CI_lower", "Estimate", "CI_upper")
+
+# Add a column for the effect names (e.g., Intercept, Carbon, etc.)
+plant_div_ci_df$Effect <- rownames(predicted_plant_div_with_ci$fixed)
+
+# Reorder for readability
+plant_div_ci_df <- plant_div_ci_df[, c("Effect", "Estimate", "CI_lower", "CI_upper")]
+
+# View it
+print(plant_div_ci_df)
+
+# Extract the intercept value
+intercept_estimate <- plant_div_ci_df$Estimate[plant_div_ci_df$Effect == "(Intercept)"]
+intercept_lower <- plant_div_ci_df$CI_lower[plant_div_ci_df$Effect == "(Intercept)"]
+intercept_upper <- plant_div_ci_df$CI_upper[plant_div_ci_df$Effect == "(Intercept)"]
+
+# Now create a new column with actual predicted values
+plant_div_ci_df$Actual_Estimate <- plant_div_ci_df$Estimate
+plant_div_ci_df$Actual_CI_lower <- plant_div_ci_df$CI_lower
+plant_div_ci_df$Actual_CI_upper <- plant_div_ci_df$CI_upper
+
+# Add the intercept to all *non-intercept* rows
+non_intercept_rows <- plant_div_ci_df$Effect != "(Intercept)"
+
+plant_div_ci_df$Actual_Estimate[non_intercept_rows] <- 
+  plant_div_ci_df$Estimate[non_intercept_rows] + intercept_estimate
+
+plant_div_ci_df$Actual_CI_lower[non_intercept_rows] <- 
+  plant_div_ci_df$CI_lower[non_intercept_rows] + intercept_lower
+
+plant_div_ci_df$Actual_CI_upper[non_intercept_rows] <- 
+  plant_div_ci_df$CI_upper[non_intercept_rows] + intercept_upper
+
+
+# Using base R
+colnames(plant_div_ci_df)[colnames(plant_div_ci_df) == "Effect"] <- "Type"
+
+plant_div_ci_df$Type[plant_div_ci_df$Type == "(Intercept)"] <- "Mature"
+plant_div_ci_df$Type[plant_div_ci_df$Type == "TypeRegen"] <- "Regen"
+plant_div_ci_df$Type[plant_div_ci_df$Type == "TypeUnforested (heath)"] <- "Unforested (heath)"
+plant_div_ci_df$Type[plant_div_ci_df$Type == "TypeUnforested (remnant)"] <- "Unforested (remnant)"
+
+summary(diversity_model)
+
+
+plant_div_ci_df
+
+
+```
+
+### Plotting plant iversity by forest treatment
+
+```{r}
+plant_diversity_graph <- ggplot(plant_div, aes(x = Type, y = Diversity_Index, fill = Type)) +
+  
+  # Violin plot to show distribution of raw values
+  geom_violin(alpha = 0.3, color = NA, width = 0.9) +
+  
+  # Individual data points (jittered)
+  geom_jitter(aes(color = Type), size = 2, shape = 21, width = 0.1, height = 0, alpha = 0.6) +
+  
+  # Model estimates (mean points from plant_div_ci_df)
+  geom_point(data = plant_div_ci_df, 
+             aes(x = Type, y = Actual_Estimate), 
+             shape = 21, fill = "black", color = "black", size = 3, inherit.aes = FALSE) +
+  
+  # Confidence intervals (error bars)
+  geom_errorbar(data = plant_div_ci_df,
+                aes(x = Type, ymin = Actual_CI_lower, ymax = Actual_CI_upper), 
+                width = 0.2, color = "black", size = 0.5, inherit.aes = FALSE) +
+
+  # Aesthetics and themes
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Forest Treatment",
+    y = "Diversity Index (1 - Simpson's D)",
+    fill = "Type",
+    title = "Plant Diversity"
+  ) +
+  scale_fill_manual(values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  )) +
+  scale_color_manual(values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  ))
+
+
+```
+
+## Plant Richness:
+
+### Extracting model predicted data:
+
+```{r}
+
+# Step 1: Extract the intercept value
+intercept_value <- coef(summary(richness_model))["(Intercept)", "Estimate"]
+
+# Step 2: Get confidence intervals (for all fixed effects)
+wald_ci <- confint(richness_model, level = 0.95)
+
+# Step 3: Create results dataframe
+results_df <- data.frame(
+  Effect = rownames(coef(summary(richness_model))),
+  Estimate = coef(summary(richness_model))[, "Estimate"],
+  Std_Error = coef(summary(richness_model))[, "Std. Error"],
+  p_value = coef(summary(richness_model))[, "Pr(>|z|)"],
+  CI_Lower = wald_ci[, 1],
+  CI_Upper = wald_ci[, 2]
+)
+
+# Step 4: Add real (absolute) estimates and CIs — only modify non-intercepts
+results_df$Real_Estimate <- results_df$Estimate
+results_df$Real_CI_Lower <- results_df$CI_Lower
+results_df$Real_CI_Upper <- results_df$CI_Upper
+
+non_intercepts <- results_df$Effect != "(Intercept)"
+
+results_df$Real_Estimate[non_intercepts] <- results_df$Estimate[non_intercepts] + intercept_value
+results_df$Real_CI_Lower[non_intercepts] <- results_df$CI_Lower[non_intercepts] + intercept_value
+results_df$Real_CI_Upper[non_intercepts] <- results_df$CI_Upper[non_intercepts] + intercept_value
+
+# Step 5: Rename 'Effect' column to 'Type' and recode factor levels
+colnames(results_df)[colnames(results_df) == "Effect"] <- "Type"
+
+results_df$Type[results_df$Type == "(Intercept)"] <- "Mature"
+results_df$Type[results_df$Type == "TypeRegen"] <- "Regen"
+results_df$Type[results_df$Type == "TypeUnforested (heath)"] <- "Unforested (heath)"
+results_df$Type[results_df$Type == "TypeUnforested (remnant)"] <- "Unforested (remnant)"
+
+# Step 6: (Optional) Set row names to match the cleaned-up 'Type' values
+rownames(results_df) <- results_df$Type
+
+
+
+# Step 8: Exponentiate Estimates and Confidence Intervals
+results_df$Real_Estimate <- exp(results_df$Real_Estimate)
+results_df$Real_CI_Lower <- exp(results_df$Real_CI_Lower)
+results_df$Real_CI_Upper <- exp(results_df$Real_CI_Upper)
+
+print(results_df)
+
+```
+
+### Plotting plant richness by forest treatment
+
+```{r}
+plant_richness_graph <- ggplot(plant_rich, aes(x = Type, y = Richness, fill = Type)) +
+  
+  # Violin plot to show data distribution
+  geom_violin(alpha = 0.3, color = NA, width = 0.9) +
+
+  # Jittered individual data points
+  geom_jitter(aes(color = Type), size = 2, shape = 21, width = 0.1, height = 0, alpha = 0.6) +
+
+  # Model estimates (points)
+  geom_point(data = results_df, aes(x = Type, y = Real_Estimate),
+             shape = 21, fill = "black", size = 3, inherit.aes = FALSE) +
+
+  # Confidence intervals from model
+  geom_errorbar(data = results_df, 
+                aes(x = Type, ymin = Real_CI_Lower, ymax = Real_CI_Upper),
+                width = 0.2, color = "black", size = 0.5, inherit.aes = FALSE) +
+
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10)
+  ) +
+  labs(
+    x = "Forest Treatment",
+    y = "Species Richness",
+    fill = "Type",
+    title = "Plant Richness"
+  ) +
+  scale_fill_manual(
+    name = "Forest Treatment",
+                    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  )) +
+  scale_color_manual(name = "Forest Treatment",
+                     values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  ))
+
+
+plant_rich_div_graph <- plant_diversity_graph + plant_richness_graph
+
+plant_rich_div_graph
+
+save_plot(plant_rich_div_graph, "plant_rich_div_graph")
+
+```
+
+
+## Plant Community Composition:
+
+```{r}
+plant_com_dataset <- plant_com_dataset[-c(561, 701), ]
+
+
+plant_com_wide <- as.data.frame(spread(plant_com_dataset, Species, DOMIN))
+
+```
+
+After converting the data into wide format, I need to replace all the NA values with 0
+
+```{r, results='hide'}
+plant_com_wide[is.na(plant_com_wide)] <- 0
+
+plant_com_env <- plant_com_wide[c("Plot", "Site.y", "Type")]
+
+plant_com_wide$Plot <- NULL
+plant_com_wide$Site.y <- NULL
+plant_com_wide$Type <- NULL
+plant_com_wide$Family <- NULL
+plant_com_wide$Genus <- NULL
+
+plant_com_wide <- as.data.frame(lapply(plant_com_wide, as.integer))
+
+str(plant_com_wide)
+
+NMDS_plant_com <- metaMDS(plant_com_wide)
+NMDS_plant_com
+
+NMDS_plant_com$stress
+
+
+stressplot(NMDS_plant_com)
+```
+
+```{r, warning=FALSE, message=FALSE}
+plant_com_env$Type <- factor(plant_com_env$Type)
+
+
+scl <- 4
+colvec <- c("#D55E00", "#009E73", "#56B4E9", "#CC79A7")
+plot(NMDS_plant_com, type = "n")
+with(plant_com_env, points(NMDS_plant_com, display = "sites", col = colvec[Type],
+                          scaling = scl, pch = 21, bg = colvec[Type]))
+with(plant_com_env, legend("topleft", legend = levels(Type), bty = "n",
+                          col = colvec, pch = 21, pt.bg = colvec))
+
+NMDS_plant_com.fit <- envfit(NMDS_plant_com ~ Type , data = plant_com_env, perm = 999)
+NMDS_plant_com.fit
+
+plot(NMDS_plant_com.fit, dis = "site")
+plot(NMDS_plant_com.fit)
+```
+### Plant NMDS
+
+```{r}
+# 1. Calculate ellipses using vegan::ordiellipse() but don't draw them
+library(vegan)
+
+ordi_ellipses <- ordiellipse(NMDS_plant_com, plant_com_env$Type, kind = "se", conf = 0.95, draw = "none")
+
+# 2. Extract ellipse coordinates into a data frame
+ellipse_df <- do.call(rbind, lapply(names(ordi_ellipses), function(group) {
+  ellipse_points <- vegan:::veganCovEllipse(ordi_ellipses[[group]]$cov, 
+                                            ordi_ellipses[[group]]$center, 
+                                            ordi_ellipses[[group]]$scale)
+  data.frame(ellipse_points, Type = group)
+}))
+colnames(ellipse_df)[1:2] <- c("NMDS1", "NMDS2")
+
+
+library(ggplot2)
+
+# Your main NMDS points
+nmds_df <- data.frame(
+  NMDS1 = NMDS_plant_com$points[, 1],
+  NMDS2 = NMDS_plant_com$points[, 2],
+  Type = plant_com_env$Type
+)
+
+anosim_plant_com_r_tr <- anosim(wisconsin(sqrt(plant_com_wide)), plant_com_env$Type, distance = "bray", permutations = 9999)
+
+
+R_val <- round(anosim_plant_com_r_tr$statistic, 3)
+p_val <- ifelse(anosim_plant_com_r_tr$signif < 0.001, "< 0.001", paste0("= ", signif(anosim_plant_com_r_tr$signif, 2)))
+
+anosim_label <- paste0("ANOSIM R = ", R_val, "\n", "p ", p_val)
+
+# Site scores
+site_scores <- as.data.frame(NMDS_plant_com$points)
+
+colnames(site_scores)[1:2] <- c("NMDS1", "NMDS2")
+
+site_scores$Type <- plant_com_env$Type  # Add grouping
+
+# Species scores (usually in $species, or use scores())
+species_scores <- as.data.frame(scores(NMDS_plant_com, display = "species"))
+species_scores$Species <- rownames(species_scores)
+
+plant_nmds_hull_graph <- ggplot(nmds_df, aes(x = NMDS1, y = NMDS2, color = Type, fill = Type)) +
+  geom_point(shape = 21, size = 1, stroke = 1) +
+  geom_polygon(data = ellipse_df, aes(x = NMDS1, y = NMDS2, fill = Type, group = Type, color = Type),
+               alpha = 0.4, linewidth = 0.5) +
+  # ⬇️ Add species labels with inherit.aes = FALSE
+  geom_text(data = species_scores, 
+            mapping = aes(x = NMDS1, y = NMDS2, label = Species), 
+            inherit.aes = FALSE, 
+            color = "white", size = 2, alpha = 0) +
+  scale_color_manual(name = "Forest Treatment",
+                     values = colvec) +
+  scale_fill_manual(name = "Forest Treatment",
+                    values = colvec) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10),
+    legend.position = "none"
+) +
+  annotate("text", x = Inf, y = Inf, label = anosim_label, hjust = 1.1, vjust = 1.5, size = 3.5, family = "mono") +
+  labs(title = "Plant Community Separation");
+
+plant_nmds_hull_graph <- plant_nmds_hull_graph + coord_fixed()
+
+plant_nmds_hull_graph
+
+save_plot(plant_nmds_hull_graph, "plant_nmds_hull_graph")
+```
+### Plant NMDS resampling
+
+```{r}
+
+# Base ANOSIM R value with all species
+base_R <- anosim(wisconsin(sqrt(plant_com_wide)), plant_com_env$Type, distance = "bray", permutations = 999)$statistic
+
+# Store results
+jackknife_results <- data.frame(Species = character(),
+                                 R_value = numeric(),
+                                 Delta_R = numeric(),
+                                 stringsAsFactors = FALSE)
+
+# Loop over all species (columns in your wide matrix)
+species_names <- colnames(plant_com_wide)
+
+for (sp in species_names) {
+  # Remove one species
+  reduced_matrix <- plant_com_wide[, setdiff(species_names, sp)]
+  
+  # Run ANOSIM
+  anosim_result <- anosim(wisconsin(sqrt(reduced_matrix)), plant_com_env$Type, distance = "bray", permutations = 999)
+  
+  # Store R and change from base
+  R_val <- anosim_result$statistic
+  delta_R <- base_R - R_val
+  
+  jackknife_results <- rbind(jackknife_results, data.frame(Species = sp, R_value = R_val, Delta_R = delta_R))
+}
+
+# Sort by greatest impact (largest Delta_R)
+jackknife_results <- jackknife_results[order(-jackknife_results$Delta_R), ]
+
+plant_jk_graph <- ggplot(jackknife_results, aes(x = reorder(Species, Delta_R), y = Delta_R)) +
+  geom_col(fill = "#0072B2") +
+  coord_flip() +
+  labs(title = "Plant Species Impact on NMDS Clustering",
+       x = "Species Removed",
+       y = "Decrease in ANOSIM R") +
+  theme_minimal()
+
+plant_jk_graph
+
+save_plot(plant_jk_graph, "plant_jk")
+```
+
+### Plant NMD (No Trees)
+
+
+```{r}
+# Define species to exclude
+tree_species <- c("Silver birch", "Rowan", "Downy birch")
+
+# Filter matrix to exclude these species
+plant_com_no_trees <- plant_com_wide[, !colnames(plant_com_wide) %in% tree_species]
+
+```
+
+```{r}
+# Run NMDS on the modified dataset
+NMDS_plant_com_no_trees <- metaMDS(wisconsin(sqrt(plant_com_no_trees)), distance = "bray", k = 2, trymax = 100)
+
+```
+
+```{r}
+anosim_no_trees <- anosim(wisconsin(sqrt(plant_com_no_trees)), plant_com_env$Type, distance = "bray", permutations = 9999)
+
+# Create label for the plot
+R_val <- round(anosim_no_trees$statistic, 3)
+p_val <- ifelse(anosim_no_trees$signif < 0.001, "< 0.001", paste0("= ", signif(anosim_no_trees$signif, 2)))
+anosim_label <- paste0("ANOSIM R = ", R_val, "\n", "p ", p_val)
+
+```
+
+
+```{r}
+ordi_ellipses_no_trees <- ordiellipse(NMDS_plant_com_no_trees, plant_com_env$Type, kind = "se", conf = 0.95, draw = "none")
+
+ellipse_df_no_trees <- do.call(rbind, lapply(names(ordi_ellipses_no_trees), function(group) {
+  ellipse_points <- vegan:::veganCovEllipse(ordi_ellipses_no_trees[[group]]$cov, 
+                                            ordi_ellipses_no_trees[[group]]$center, 
+                                            ordi_ellipses_no_trees[[group]]$scale)
+  data.frame(ellipse_points, Type = group)
+}))
+colnames(ellipse_df_no_trees)[1:2] <- c("NMDS1", "NMDS2")
+
+
+
+```
+
+
+```{r}
+# Site scores
+nmds_df_no_trees <- data.frame(
+  NMDS1 = NMDS_plant_com_no_trees$points[, 1],
+  NMDS2 = NMDS_plant_com_no_trees$points[, 2],
+  Type = plant_com_env$Type
+)
+
+# Species scores for labels (optional, may require handling NAs)
+species_scores <- data.frame(scores(NMDS_plant_com_no_trees, display = "species"))
+species_scores$Species <- rownames(species_scores)
+colnames(species_scores)[1:2] <- c("NMDS1", "NMDS2")
+
+```
+
+```{r}
+plant_nmds_no_trees_graph <- ggplot(nmds_df_no_trees, aes(x = NMDS1, y = NMDS2, color = Type, fill = Type)) +
+  geom_point(shape = 21, size = 1, stroke = 1) +
+  geom_polygon(data = ellipse_df_no_trees, aes(x = NMDS1, y = NMDS2, fill = Type, group = Type, color = Type),
+               alpha = 0.4, linewidth = 0.5) +
+  geom_text(data = species_scores, 
+            aes(x = NMDS1, y = NMDS2, label = Species), 
+            inherit.aes = FALSE, 
+            color = "white", size = 2, alpha = 0) +
+  scale_color_manual(name = "Forest Treatment",
+                     values = colvec) +
+  scale_fill_manual(name = "Forest Treatment",
+                    values = colvec) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10),) +
+  annotate("text", x = Inf, y = Inf, label = anosim_label, hjust = 1.1, vjust = 1.5, size = 3.5, family = "mono") +
+  labs(title = "Plant Community Separation (Without Tree Species)")
+
+plant_nmds_no_trees_graph <- plant_nmds_no_trees_graph + coord_fixed()
+
+plant_nmds_no_trees_graph
+
+save_plot(plant_nmds_no_trees_graph, "plant_nmds_no_trees_graph")
+```
+### Plant NMDS resampling (No Trees)
+
+
+```{r}
+
+# Base ANOSIM R value with no tree species
+base_R_no_trees <- anosim(wisconsin(sqrt(plant_com_no_trees)), plant_com_env$Type, distance = "bray", permutations = 999)$statistic
+
+# Store results
+jackknife_results_no_trees <- data.frame(Species = character(),
+                                         R_value = numeric(),
+                                         Delta_R = numeric(),
+                                         stringsAsFactors = FALSE)
+
+# Loop over all species (columns) in the no-trees matrix
+species_names_no_trees <- colnames(plant_com_no_trees)
+
+for (sp in species_names_no_trees) {
+  # Remove one species
+  reduced_matrix <- plant_com_no_trees[, setdiff(species_names_no_trees, sp)]
+  
+  # Run ANOSIM
+  anosim_result <- anosim(wisconsin(sqrt(reduced_matrix)), plant_com_env$Type, distance = "bray", permutations = 999)
+  
+  # Store R and change from base
+  R_val <- anosim_result$statistic
+  delta_R <- base_R_no_trees - R_val
+  
+  jackknife_results_no_trees <- rbind(jackknife_results_no_trees,
+                                      data.frame(Species = sp, R_value = R_val, Delta_R = delta_R))
+}
+
+# Sort by greatest impact (largest Delta_R)
+jackknife_results_no_trees <- jackknife_results_no_trees[order(-jackknife_results_no_trees$Delta_R), ]
+
+# Plot the results
+plant_jk_no_trees_graph <- ggplot(jackknife_results_no_trees, aes(x = reorder(Species, Delta_R), y = Delta_R)) +
+  geom_col(fill = "#0072B2") +
+  coord_flip() +
+  labs(title = "Plant Species Impact on NMDS Clustering (No Trees)",
+       x = "Species Removed",
+       y = "Decrease in ANOSIM R") +
+  theme_minimal()
+
+jackknife_results_no_trees
+
+# Display the graph
+plant_jk_no_trees_graph
+
+save_plot(plant_jk_no_trees_graph, "plant_jk_no_trees")
+
+palette.colors()
+```
+## Soil Invertebrate Diversity:
+
+### Extracting model predicted data
+
+```{r}
+predicted_soil_inv_diversity <- predict(soil_invert_diversity_model, type = "response", level = 1)
+
+predicted_soil_div_with_ci <- intervals(soil_invert_diversity_model, level = 0.95)
+
+# Extract just the fixed effects into a data frame
+soil_div_ci_df <- as.data.frame(predicted_soil_div_with_ci$fixed)
+
+
+# Optionally, name the columns
+colnames(soil_div_ci_df) <- c("CI_lower", "Estimate", "CI_upper")
+
+# Add a column for the effect names (e.g., Intercept, Carbon, etc.)
+soil_div_ci_df$Effect <- rownames(predicted_soil_div_with_ci$fixed)
+
+# Reorder for readability
+soil_div_ci_df <- soil_div_ci_df[, c("Effect", "Estimate", "CI_lower", "CI_upper")]
+
+# View it
+print(soil_div_ci_df)
+
+# Extract the intercept value
+soil_intercept_estimate <- soil_div_ci_df$Estimate[soil_div_ci_df$Effect == "(Intercept)"]
+soil_intercept_lower <- soil_div_ci_df$CI_lower[soil_div_ci_df$Effect == "(Intercept)"]
+soil_intercept_upper <- soil_div_ci_df$CI_upper[soil_div_ci_df$Effect == "(Intercept)"]
+
+# Now create a new column with actual predicted values
+soil_div_ci_df$Actual_Estimate <- soil_div_ci_df$Estimate
+soil_div_ci_df$Actual_CI_lower <- soil_div_ci_df$CI_lower
+soil_div_ci_df$Actual_CI_upper <- soil_div_ci_df$CI_upper
+
+# Add the intercept to all *non-intercept* rows
+soil_non_intercept_rows <- soil_div_ci_df$Effect != "(Intercept)"
+
+soil_div_ci_df$Actual_Estimate[soil_non_intercept_rows] <- 
+  soil_div_ci_df$Estimate[soil_non_intercept_rows] + soil_intercept_estimate
+
+soil_div_ci_df$Actual_CI_lower[soil_non_intercept_rows] <- 
+  soil_div_ci_df$CI_lower[soil_non_intercept_rows] + soil_intercept_lower
+
+soil_div_ci_df$Actual_CI_upper[soil_non_intercept_rows] <- 
+  soil_div_ci_df$CI_upper[soil_non_intercept_rows] + soil_intercept_upper
+
+
+# Using base R
+colnames(soil_div_ci_df)[colnames(soil_div_ci_df) == "Effect"] <- "Type"
+
+soil_div_ci_df$Type[soil_div_ci_df$Type == "(Intercept)"] <- "Mature"
+soil_div_ci_df$Type[soil_div_ci_df$Type == "TypeRegen"] <- "Regen"
+soil_div_ci_df$Type[soil_div_ci_df$Type == "TypeUnforested (heath)"] <- "Unforested (heath)"
+soil_div_ci_df$Type[soil_div_ci_df$Type == "TypeUnforested (remnant)"] <- "Unforested (remnant)"
+
+
+soil_div_ci_df
+
+
+```
+### Plotting soil invertebrate diversity
+
+
+```{r}
+soil_diversity_graph <- ggplot(soil_invert_div, aes(x = Type, y = Diversity_Index, fill = Type)) +
+  
+  # Violin plot to show distribution of raw diversity index values
+  geom_violin(alpha = 0.3, color = NA, width = 0.9) +
+
+  # Individual data points (jittered)
+  geom_jitter(aes(color = Type), size = 2, shape = 21, width = 0.1, height = 0, alpha = 0.6) +
+
+  # Model-estimated means (points)
+  geom_point(data = soil_div_ci_df, 
+             aes(x = Type, y = Actual_Estimate), 
+             shape = 21, fill = "black", color = "black", size = 3, inherit.aes = FALSE) +
+
+  # Confidence intervals (error bars)
+  geom_errorbar(data = soil_div_ci_df, 
+                aes(x = Type, ymin = Actual_CI_lower, ymax = Actual_CI_upper), 
+                width = 0.2, color = "black", size = 0.5, inherit.aes = FALSE) +
+
+  # Theme and styling
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Forest Treatment",
+    y = "Diversity Index (1 - Simpson's D)",
+    fill = "Type",
+    title = "Soil Invertebrate Diversity"
+  ) +
+  scale_fill_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  )) +
+  scale_color_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  ))
+
+```
+
+## Soil Invertebrate Richness:
+
+### Extracting soil invertebrate richness data:
+
+```{r}
+
+# Step 1: Extract the intercept value
+soil_intercept_value <- coef(summary(soil_invert_richness_model))["(Intercept)", "Estimate"]
+
+soil_wald_ci <- confint(soil_invert_richness_model, level = 0.95)
+
+# Drop .sig01 row
+soil_wald_ci <- soil_wald_ci[!rownames(soil_wald_ci) %in% ".sig01", ]
+
+# Then build the dataframe
+soil_results_df <- data.frame(
+  Effect = rownames(coef(summary(soil_invert_richness_model))),
+  Estimate = coef(summary(soil_invert_richness_model))[, "Estimate"],
+  Std_Error = coef(summary(soil_invert_richness_model))[, "Std. Error"],
+  p_value = coef(summary(soil_invert_richness_model))[, "Pr(>|z|)"],
+  CI_Lower = soil_wald_ci[, 1],
+  CI_Upper = soil_wald_ci[, 2]
+)
+
+
+# Step 4: Add real (absolute) estimates and CIs — only modify non-intercepts
+soil_results_df$Real_Estimate <- soil_results_df$Estimate
+soil_results_df$Real_CI_Lower <- soil_results_df$CI_Lower
+soil_results_df$Real_CI_Upper <- soil_results_df$CI_Upper
+
+soil_non_intercepts <- soil_results_df$Effect != "(Intercept)"
+
+soil_results_df$Real_Estimate[soil_non_intercepts] <- soil_results_df$Estimate[soil_non_intercepts] + soil_intercept_value
+soil_results_df$Real_CI_Lower[soil_non_intercepts] <- soil_results_df$CI_Lower[soil_non_intercepts] + soil_intercept_value
+soil_results_df$Real_CI_Upper[soil_non_intercepts] <- soil_results_df$CI_Upper[soil_non_intercepts] + soil_intercept_value
+
+# Step 5: Rename 'Effect' column to 'Type' and recode factor levels
+colnames(soil_results_df)[colnames(soil_results_df) == "Effect"] <- "Type"
+
+soil_results_df$Type[soil_results_df$Type == "(Intercept)"] <- "Mature"
+soil_results_df$Type[soil_results_df$Type == "TypeRegen"] <- "Regen"
+soil_results_df$Type[soil_results_df$Type == "TypeUnforested (heath)"] <- "Unforested (heath)"
+soil_results_df$Type[soil_results_df$Type == "TypeUnforested (remnant)"] <- "Unforested (remnant)"
+
+# Step 6: (Optional) Set row names to match the cleaned-up 'Type' values
+rownames(soil_results_df) <- soil_results_df$Type
+
+
+
+# Step 8: Exponentiate Estimates and Confidence Intervals
+soil_results_df$Real_Estimate <- exp(soil_results_df$Real_Estimate)
+soil_results_df$Real_CI_Lower <- exp(soil_results_df$Real_CI_Lower)
+soil_results_df$Real_CI_Upper <- exp(soil_results_df$Real_CI_Upper)
+
+print(soil_results_df)
+
+```
+### Plotting soil invertebrate richness
+
+```{r}
+soil_invert_richness_graph <- ggplot(soil_invert_rich, aes(x = Type, y = Richness, fill = Type)) +
+
+  # Violin plot for distribution of raw richness values
+  geom_violin(alpha = 0.3, color = NA, width = 0.9) +
+
+  # Jittered individual data points
+  geom_jitter(aes(color = Type), size = 2, shape = 21, width = 0.1, height = 0, alpha = 0.6) +
+
+  # Model-based means (points)
+  geom_point(data = soil_results_df,
+             aes(x = Type, y = Real_Estimate),
+             shape = 21, fill = "black", color = "black", size = 3, inherit.aes = FALSE) +
+
+  # Model-based confidence intervals (error bars)
+  geom_errorbar(data = soil_results_df,
+                aes(x = Type, ymin = Real_CI_Lower, ymax = Real_CI_Upper),
+                width = 0.2, color = "black", size = 0.5, inherit.aes = FALSE) +
+
+  # Clean minimal theme
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10)
+  ) +
+  labs(
+    x = "Forest Treatment",
+    y = "Order level Richness",
+    fill = "Type",
+    title = "Soil invertebrate Richness"
+  ) +
+  scale_fill_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  )) +
+  scale_color_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  ))
+
+soil_div_rich_graph <- soil_diversity_graph + soil_invert_richness_graph
+
+soil_div_rich_graph
+
+save_plot(soil_div_rich_graph, "soil_rich_div_graph")
+```
+
+## Soil Invertebrate Community Composition:
+
+```{r}
+
+#soil_invert_dataset <- plant_com_dataset[-c(561, 701), ]
+
+soil_invert_dataset <- soil_invert_dataset[c("Order", "Type", "Abundance", "Site.y", "Plot")]
+
+
+soil_invert_dataset <- aggregate(cbind(Abundance) ~ Order + Plot, data = soil_invert_dataset, FUN = sum)
+
+soil_invert_dataset <- merge(soil_invert_dataset, overview_dataset, by = "Plot")
+
+soil_invert_dataset <- soil_invert_dataset[c("Order", "Type", "Abundance", "Site", "Plot")]
+
+soil_invert_wide <- as.data.frame(spread(soil_invert_dataset, Order, Abundance))
+
+```
+
+After converting the data into wide format, I need to replace all the NA values with 0
+
+```{r}
+soil_invert_wide[is.na(soil_invert_wide)] <- 0
+
+soil_invert_env <- soil_invert_wide[c("Plot", "Type", "Site")]
+
+soil_invert_wide$Plot <- NULL
+soil_invert_wide$Site <- NULL
+soil_invert_wide$Type <- NULL
+soil_invert_wide$Family <- NULL
+soil_invert_wide$Genus <- NULL
+
+soil_invert_wide <- as.data.frame(lapply(soil_invert_wide, as.integer))
+
+str(soil_invert_wide)
+
+NMDS_soil_invert <- metaMDS(soil_invert_wide)
+NMDS_soil_invert
+
+
+stressplot(NMDS_soil_invert)
+```
+
+```{r}
+soil_invert_env
+soil_invert_env$Type <- factor(soil_invert_env$Type)
+
+
+
+scl <- 4
+colvec <- c("#D55E00", "#009E73", "#56B4E9", "#CC79A7")
+plot(NMDS_soil_invert, type = "n")
+with(soil_invert_env, points(NMDS_soil_invert, display = "sites", col = colvec[Type],
+                          scaling = scl, pch = 21, bg = colvec[Type]))
+with(soil_invert_env, legend("topleft", legend = levels(Type), bty = "n",
+                          col = colvec, pch = 21, pt.bg = colvec))
+
+NMDS_soil_invert.fit <- envfit(NMDS_soil_invert ~ Type , data = soil_invert_env, perm = 999)
+NMDS_soil_invert.fit
+
+plot(NMDS_soil_invert.fit, dis = "site")
+plot(NMDS_soil_invert.fit)
+```
+### Soil invertebrate NMDS
+
+
+```{r}
+# 1. Calculate ellipses using vegan::ordiellipse() but don't draw them
+library(vegan)
+
+soil_ordi_ellipses <- ordiellipse(NMDS_soil_invert, soil_invert_env$Type, kind = "se", conf = 0.95, draw = "none")
+
+# 2. Extract ellipse coordinates into a data frame
+soil_ellipse_df <- do.call(rbind, lapply(names(soil_ordi_ellipses), function(group) {
+  soil_ellipse_points <- vegan:::veganCovEllipse(soil_ordi_ellipses[[group]]$cov, 
+                                            soil_ordi_ellipses[[group]]$center, 
+                                            soil_ordi_ellipses[[group]]$scale)
+  data.frame(soil_ellipse_points, Type = group)
+}))
+colnames(soil_ellipse_df)[1:2] <- c("NMDS1", "NMDS2")
+
+
+library(ggplot2)
+
+# Your main NMDS points
+soil_nmds_df <- data.frame(
+  NMDS1 = NMDS_soil_invert$points[, 1],
+  NMDS2 = NMDS_soil_invert$points[, 2],
+  Type = soil_invert_env$Type
+)
+
+soil_anosim_plant_com_r_tr <- anosim(wisconsin(sqrt(soil_invert_wide)), soil_invert_env$Type, distance = "bray", permutations = 9999)
+
+
+soil_R_val <- round(soil_anosim_plant_com_r_tr$statistic, 3)
+soil_p_val <- ifelse(soil_anosim_plant_com_r_tr$signif < 0.001, "< 0.001", paste0("= ", signif(soil_anosim_plant_com_r_tr$signif, 2)))
+
+soil_anosim_label <- paste0("ANOSIM R = ", soil_R_val, "\n", "p ", soil_p_val)
+
+# Site scores
+soil_site_scores <- as.data.frame(NMDS_soil_invert$points)
+
+colnames(soil_site_scores)[1:2] <- c("NMDS1", "NMDS2")
+
+soil_site_scores$Type <- soil_invert_env$Type  # Add grouping
+
+# Species scores (usually in $species, or use scores())
+soil_species_scores <- as.data.frame(scores(NMDS_soil_invert, display = "species"))
+soil_species_scores$Species <- rownames(soil_species_scores)
+
+soil_nmds_hull_graph <- ggplot(soil_nmds_df, aes(x = NMDS1, y = NMDS2, color = Type, fill = Type)) +
+  geom_point(shape = 21, size = 1, stroke = 1) +
+  geom_polygon(data = soil_ellipse_df, aes(x = NMDS1, y = NMDS2, fill = Type, group = Type, color = Type),
+               alpha = 0.4, linewidth = 0.5) +
+  # Species labels
+  geom_text(data = soil_species_scores, aes(x = NMDS1, y = NMDS2, label = Species),
+            color = "darkcyan", alpha = 0,
+            inherit.aes = FALSE,
+            size = 3) +
+  scale_color_manual(name = "Forest Treatment",
+                     values = colvec) +
+  scale_fill_manual(name = "Forest Treatment",
+                    values = colvec) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10)) +
+  annotate("text", x = Inf, y = Inf, label = soil_anosim_label, hjust = 1.1, vjust = 1.5, size = 3.5, family = "mono") +
+  labs(title = "Soil Invertebrate Community Separation")
+
+soil_nmds_hull_graph + coord_fixed()
+
+save_plot(soil_nmds_hull_graph, "soil_nmds_hull_graph")
+```
+
+### Soil invertebrate NMDS resampling
+
+```{r}
+library(vegan)
+
+soil_invert_wide_nonzero <- soil_invert_wide[rowSums(soil_invert_wide) > 0, ]
+soil_invert_env_nonzero <- soil_invert_env[rowSums(soil_invert_wide) > 0, ]
+
+
+nonzero_rows <- rowSums(soil_invert_wide) > 0
+soil_invert_wide_nonzero <- soil_invert_wide[nonzero_rows, ]
+soil_invert_env_nonzero <- soil_invert_env[nonzero_rows, ]
+
+anyNA(soil_invert_wide_nonzero)  # Should return FALSE
+
+library(vegan)
+
+base_R <- anosim(
+  wisconsin(sqrt(soil_invert_wide_nonzero)),
+  soil_invert_env_nonzero$Type,
+  distance = "bray",
+  permutations = 999
+)$statistic
+
+
+# Use non-zero rows only
+base_R <- anosim(wisconsin(sqrt(soil_invert_wide_nonzero)), soil_invert_env_nonzero$Type, distance = "bray", permutations = 999)$statistic
+
+
+jackknife_results <- data.frame(Species = character(),
+                                R_value = numeric(),
+                                Delta_R = numeric(),
+                                stringsAsFactors = FALSE)
+
+species_names <- colnames(soil_invert_wide_nonzero)
+
+for (sp in species_names) {
+  # Remove the species (column)
+  reduced_matrix <- soil_invert_wide_nonzero[, setdiff(species_names, sp)]
+  
+  # Remove rows that are now completely zero
+  nonzero_rows <- rowSums(reduced_matrix) > 0
+  reduced_matrix <- reduced_matrix[nonzero_rows, ]
+  reduced_env <- soil_invert_env_nonzero[nonzero_rows, ]
+
+  # Skip iteration if data becomes too small or empty
+  if (nrow(reduced_matrix) < 2 || anyNA(reduced_matrix)) next
+  
+  # Run ANOSIM
+  anosim_result <- anosim(wisconsin(sqrt(reduced_matrix)), reduced_env$Type, distance = "bray", permutations = 999)
+  
+  # Store results
+  R_val <- anosim_result$statistic
+  delta_R <- base_R - R_val
+  jackknife_results <- rbind(jackknife_results, data.frame(Species = sp, R_value = R_val, Delta_R = delta_R))
+}
+
+
+# Sort
+jackknife_results <- jackknife_results[order(-jackknife_results$Delta_R), ]
+
+# Plot
+soil_inv_jk_graph <- ggplot(jackknife_results, aes(x = reorder(Species, Delta_R), y = Delta_R)) +
+  geom_col(fill = "#0072B2") +
+  coord_flip() +
+  labs(title = "Soil Invertebrate Order Impact on NMDS Clustering",
+       x = "Order Removed",
+       y = "Decrease in ANOSIM R") +
+  theme_minimal()
+
+soil_inv_jk_graph
+
+save_plot(soil_inv_jk_graph, "soil_inv_jk_graph")
+
+```
+## Ground Invertebrate Diversity:
+
+### Extracting model predicted ground invertebrate diversity:
+
+```{r}
+predicted_pitfall_diversity <- predict(pitfall_diversity_model, type = "response", level = 1)
+
+predicted_pitfall_div_with_ci <- intervals(pitfall_diversity_model, level = 0.95)
+
+# Extract just the fixed effects into a data frame
+pit_div_ci_df <- as.data.frame(predicted_pitfall_div_with_ci$fixed)
+
+
+# Optionally, name the columns
+colnames(pit_div_ci_df) <- c("CI_lower", "Estimate", "CI_upper")
+
+# Add a column for the effect names (e.g., Intercept, Carbon, etc.)
+pit_div_ci_df$Effect <- rownames(predicted_pitfall_div_with_ci$fixed)
+
+# Reorder for readability
+pit_div_ci_df <- pit_div_ci_df[, c("Effect", "Estimate", "CI_lower", "CI_upper")]
+
+# View it
+print(pit_div_ci_df)
+
+# Extract the intercept value
+pit_intercept_estimate <- pit_div_ci_df$Estimate[pit_div_ci_df$Effect == "(Intercept)"]
+pit_intercept_lower <- pit_div_ci_df$CI_lower[pit_div_ci_df$Effect == "(Intercept)"]
+pit_intercept_upper <- pit_div_ci_df$CI_upper[pit_div_ci_df$Effect == "(Intercept)"]
+
+# Now create a new column with actual predicted values
+pit_div_ci_df$Actual_Estimate <- pit_div_ci_df$Estimate
+pit_div_ci_df$Actual_CI_lower <- pit_div_ci_df$CI_lower
+pit_div_ci_df$Actual_CI_upper <- pit_div_ci_df$CI_upper
+
+# Add the intercept to all *non-intercept* rows
+pit_non_intercept_rows <- pit_div_ci_df$Effect != "(Intercept)"
+
+pit_div_ci_df$Actual_Estimate[pit_non_intercept_rows] <- 
+  pit_div_ci_df$Estimate[pit_non_intercept_rows] + pit_intercept_estimate
+
+pit_div_ci_df$Actual_CI_lower[pit_non_intercept_rows] <- 
+  pit_div_ci_df$CI_lower[pit_non_intercept_rows] + pit_intercept_lower
+
+pit_div_ci_df$Actual_CI_upper[pit_non_intercept_rows] <- 
+  pit_div_ci_df$CI_upper[pit_non_intercept_rows] + pit_intercept_upper
+
+
+# Using base R
+colnames(pit_div_ci_df)[colnames(pit_div_ci_df) == "Effect"] <- "Type"
+
+pit_div_ci_df$Type[pit_div_ci_df$Type == "(Intercept)"] <- "Mature"
+pit_div_ci_df$Type[pit_div_ci_df$Type == "TypeRegen"] <- "Regen"
+pit_div_ci_df$Type[pit_div_ci_df$Type == "TypeUnforested (heath)"] <- "Unforested (heath)"
+pit_div_ci_df$Type[pit_div_ci_df$Type == "TypeUnforested (remnant)"] <- "Unforested (remnant)"
+
+pit_div_ci_df
+```
+
+### Plotting ground invertebrate diversity
+
+```{r}
+pitfall_diversity_graph <- ggplot(pitfall_div, aes(x = Type, y = Diversity_Index, fill = Type)) +
+
+  # Violin plot for raw data distribution
+  geom_violin(alpha = 0.3, color = NA, width = 0.9) +
+
+  # Jittered individual data points
+  geom_jitter(aes(color = Type), size = 2, shape = 21, width = 0.1, height = 0, alpha = 0.6) +
+
+  # Model-estimated means
+  geom_point(data = pit_div_ci_df,
+             aes(x = Type, y = Actual_Estimate),
+             shape = 21, fill = "black", color = "black", size = 3, inherit.aes = FALSE) +
+
+  # Model-estimated confidence intervals
+  geom_errorbar(data = pit_div_ci_df,
+                aes(x = Type, ymin = Actual_CI_lower, ymax = Actual_CI_upper),
+                width = 0.2, color = "black", size = 0.5, inherit.aes = FALSE) +
+
+  # Clean, minimal theme
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.margin = margin(10, 10, 10, 10),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Forest Treatment",
+    y = "Diversity Index (1 - Simpson's D)",
+    fill = "Type",
+    title = "Ground Invertebrate Diversity"
+  ) +
+  scale_fill_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  )) +
+  scale_color_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  ))
+
+
+```
+
+## Pitfall Invertebrate Richness:
+
+### Extracting model predicted pitfall invertebrate richness:
+
+```{r}
+
+# Step 1: Extract the intercept value
+pit_intercept_value <- coef(summary(pitfall_richness_model))["(Intercept)", "Estimate"]
+
+pit_wald_ci <- confint(pitfall_richness_model, level = 0.95)
+
+# Drop .sig01 row
+pit_wald_ci <- pit_wald_ci[!rownames(pit_wald_ci) %in% ".sig01", ]
+
+# Then build the dataframe
+pit_results_df <- data.frame(
+  Effect = rownames(coef(summary(pitfall_richness_model))),
+  Estimate = coef(summary(pitfall_richness_model))[, "Estimate"],
+  Std_Error = coef(summary(pitfall_richness_model))[, "Std. Error"],
+  p_value = coef(summary(pitfall_richness_model))[, "Pr(>|z|)"],
+  CI_Lower = pit_wald_ci[, 1],
+  CI_Upper = pit_wald_ci[, 2]
+)
+
+
+# Step 4: Add real (absolute) estimates and CIs — only modify non-intercepts
+pit_results_df$Real_Estimate <- pit_results_df$Estimate
+pit_results_df$Real_CI_Lower <- pit_results_df$CI_Lower
+pit_results_df$Real_CI_Upper <- pit_results_df$CI_Upper
+
+pit_non_intercepts <- pit_results_df$Effect != "(Intercept)"
+
+pit_results_df$Real_Estimate[pit_non_intercepts] <- pit_results_df$Estimate[pit_non_intercepts] + pit_intercept_value
+pit_results_df$Real_CI_Lower[pit_non_intercepts] <- pit_results_df$CI_Lower[pit_non_intercepts] + pit_intercept_value
+pit_results_df$Real_CI_Upper[pit_non_intercepts] <- pit_results_df$CI_Upper[pit_non_intercepts] + pit_intercept_value
+
+# Step 5: Rename 'Effect' column to 'Type' and recode factor levels
+colnames(pit_results_df)[colnames(pit_results_df) == "Effect"] <- "Type"
+
+pit_results_df$Type[pit_results_df$Type == "(Intercept)"] <- "Mature"
+pit_results_df$Type[pit_results_df$Type == "TypeRegen"] <- "Regen"
+pit_results_df$Type[pit_results_df$Type == "TypeUnforested (heath)"] <- "Unforested (heath)"
+pit_results_df$Type[pit_results_df$Type == "TypeUnforested (remnant)"] <- "Unforested (remnant)"
+
+# Step 6: (Optional) Set row names to match the cleaned-up 'Type' values
+rownames(pit_results_df) <- pit_results_df$Type
+
+
+
+# Step 8: Exponentiate Estimates and Confidence Intervals
+pit_results_df$Real_Estimate <- exp(pit_results_df$Real_Estimate)
+pit_results_df$Real_CI_Lower <- exp(pit_results_df$Real_CI_Lower)
+pit_results_df$Real_CI_Upper <- exp(pit_results_df$Real_CI_Upper)
+
+print(pit_results_df)
+
+```
+### Plotting ground invertebrate richness
+
+
+```{r}
+pitfall_richness_graph <- ggplot(pit_results_df, aes(x = Type, y = Real_Estimate, fill = Type)) +
+  geom_jitter(data = pitfall_rich, aes(x = Type, y = Richness, color = Type), 
+              size = 2, shape = 21, width = 0.1, height = 0, alpha = 0.6) +  # Add individual data points
+  geom_point(size = 3, shape = 21, color = "black", fill = "black", position = position_dodge(width = 0.8)) +  # Scatter plot with mean
+  geom_errorbar(
+    aes(ymin = Real_CI_Lower, ymax = Real_CI_Upper),  # Error bars based on confidence intervals
+    width = 0.2,  # Error bar width
+    color = "black",  # Error bar color
+    size = 0.5  # Error bar size
+  ) +
+  geom_violin(data = pitfall_rich, aes(x = Type, y = Richness, fill = Type),
+            alpha = 0.3, color = NA, width = 0.9) +
+  theme_bw() +  # Minimal theme
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),  # Grey background for facet labels
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),  # Add spacing between panels if needed
+    panel.background = element_rect(fill = "white", color = "black"),  # Apply white background with black border to panels
+    plot.margin = margin(10, 10, 10, 10)  # Text color inside the grey box
+  ) +
+  labs(
+    x = "Forest Treatment",  # x-axis label
+    y = "Order level Richness",  # y-axis label
+    fill = "Type",
+    title = "Ground Invertebrate Richness"  # Overall title
+  ) +
+  scale_fill_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  )) +
+  scale_color_manual(
+    name = "Forest Treatment",
+    values = c(
+    "Mature" = "#D55E00",
+    "Regen" = "#009E73",
+    "Unforested (heath)" = "#56B4E9",
+    "Unforested (remnant)" = "#CC79A7"
+  ))
+
+
+pitfall_rich_div_graph <- pitfall_diversity_graph + pitfall_richness_graph
+
+pitfall_rich_div_graph
+
+save_plot(pitfall_rich_div_graph, "pitfall_rich_div_graph")
+
+```
+
+## Pitfall Community Composition:
+
+```{r}
+
+pitfall_dataset <- pitfall_dataset[c("Order", "Type", "Abundance", "Site.y", "Plot")]
+
+
+pitfall_dataset <- aggregate(cbind(Abundance) ~ Order + Plot, data = pitfall_dataset, FUN = sum)
+
+pitfall_dataset <- merge(pitfall_dataset, overview_dataset, by = "Plot")
+
+pitfall_dataset <- pitfall_dataset[c("Order", "Type", "Abundance", "Site", "Plot")]
+
+pitfall_wide <- as.data.frame(spread(pitfall_dataset, Order, Abundance))
+
+```
+
+After converting the data into wide format, I need to replace all the NA values with 0
+
+```{r}
+pitfall_wide[is.na(pitfall_wide)] <- 0
+
+pitfall_env <- pitfall_wide[c("Plot", "Type", "Site")]
+
+pitfall_wide$Plot <- NULL
+pitfall_wide$Site <- NULL
+pitfall_wide$Type <- NULL
+pitfall_wide$Family <- NULL
+pitfall_wide$Genus <- NULL
+
+pitfall_wide <- as.data.frame(lapply(pitfall_wide, as.integer))
+
+str(pitfall_wide)
+
+NMDS_pitfall <- metaMDS(pitfall_wide)
+NMDS_pitfall
+
+
+stressplot(NMDS_pitfall)
+```
+
+```{r}
+pitfall_env
+pitfall_env$Type <- factor(pitfall_env$Type)
+
+
+
+scl <- 4
+colvec <- c("#D55E00", "#009E73", "#56B4E9", "#CC79A7")
+plot(NMDS_pitfall, type = "n")
+with(pitfall_env, points(NMDS_pitfall, display = "sites", col = colvec[Type],
+                          scaling = scl, pch = 21, bg = colvec[Type]))
+with(pitfall_env, legend("topleft", legend = levels(Type), bty = "n",
+                          col = colvec, pch = 21, pt.bg = colvec))
+
+NMDS_pitfall.fit <- envfit(NMDS_pitfall ~ Type , data = pitfall_env, perm = 999)
+NMDS_pitfall.fit
+
+plot(NMDS_pitfall.fit, dis = "site")
+plot(NMDS_pitfall.fit)
+```
+### Ground invertebrate NMDS
+
+
+```{r}
+# 1. Calculate ellipses using vegan::ordiellipse() but don't draw them
+library(vegan)
+
+pit_ordi_ellipses <- ordiellipse(NMDS_pitfall, pitfall_env$Type, kind = "se", conf = 0.95, draw = "none")
+
+# 2. Extract ellipse coordinates into a data frame
+pit_ellipse_df <- do.call(rbind, lapply(names(pit_ordi_ellipses), function(group) {
+  pit_ellipse_points <- vegan:::veganCovEllipse(pit_ordi_ellipses[[group]]$cov, 
+                                            pit_ordi_ellipses[[group]]$center, 
+                                            pit_ordi_ellipses[[group]]$scale)
+  data.frame(pit_ellipse_points, Type = group)
+}))
+colnames(pit_ellipse_df)[1:2] <- c("NMDS1", "NMDS2")
+
+
+library(ggplot2)
+
+# Your main NMDS points
+pit_nmds_df <- data.frame(
+  NMDS1 = NMDS_pitfall$points[, 1],
+  NMDS2 = NMDS_pitfall$points[, 2],
+  Type = pitfall_env$Type
+)
+
+pit_anosim_plant_com_r_tr <- anosim(wisconsin(sqrt(pitfall_wide)), pitfall_env$Type, distance = "bray", permutations = 9999)
+
+
+pit_R_val <- round(pit_anosim_plant_com_r_tr$statistic, 3)
+pit_p_val <- ifelse(pit_anosim_plant_com_r_tr$signif < 0.001, "< 0.001", paste0("= ", signif(pit_anosim_plant_com_r_tr$signif, 2)))
+
+pit_anosim_label <- paste0("ANOSIM R = ", pit_R_val, "\n", "p ", pit_p_val)
+
+# Site scores
+pit_site_scores <- as.data.frame(NMDS_pitfall$points)
+
+colnames(pit_site_scores)[1:2] <- c("NMDS1", "NMDS2")
+
+pit_site_scores$Type <- pitfall_env$Type  # Add grouping
+
+# Species scores (usually in $species, or use scores())
+pit_species_scores <- as.data.frame(scores(NMDS_pitfall, display = "species"))
+pit_species_scores$Species <- rownames(pit_species_scores)
+
+pit_nmds_hull_graph <- ggplot(pit_nmds_df, aes(x = NMDS1, y = NMDS2, color = Type, fill = Type)) +
+  geom_point(shape = 21, size = 1, stroke = 1) +
+  geom_polygon(data = pit_ellipse_df, aes(x = NMDS1, y = NMDS2, fill = Type, group = Type, color = Type),
+               alpha = 0.4, linewidth = 0.5) +
+  geom_text(data = pit_species_scores, aes(x = NMDS1, y = NMDS2, label = Species),
+            color = "darkcyan", alpha = 0,
+            inherit.aes = FALSE,
+            size = 2) +
+  scale_color_manual(name = "Forest Treatment",
+                     values = colvec) +
+  scale_fill_manual(name = "Forest Treatment",
+                    values = colvec) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    strip.background = element_rect(fill = "grey", color = "black", size = 1),  # Grey background for facet labels
+    strip.text = element_text(color = "black", size = 12),
+    panel.spacing = unit(1, "lines"),  # Add spacing between panels if needed
+    panel.background = element_rect(fill = "white", color = "black"),  # Apply white background with black border to panels
+    plot.margin = margin(10, 10, 10, 10) ) +
+  annotate("text", x = Inf, y = Inf, label = pit_anosim_label, hjust = 1.1, vjust = 1.5, size = 3.5, family = "mono") +
+  labs(title = "Ground Invertebrate community separation")
+
+pit_nmds_hull_graph + coord_fixed()
+
+save_plot(pit_nmds_hull_graph, "pit_nmds_hull_graph")
+
+
+```
+
+### Ground invertebrate resampling
+
+```{r}
+
+# Start by calculating the base ANOSIM R-value (with all species included)
+base_R_pitfall <- anosim(wisconsin(sqrt(pitfall_wide)), pitfall_env$Type, distance = "bray", permutations = 999)$statistic
+
+# Initialize a data frame to store the jackknife results
+jackknife_results_pitfall <- data.frame(Species = character(),
+                                        R_value = numeric(),
+                                        Delta_R = numeric(),
+                                        stringsAsFactors = FALSE)
+
+# Loop over all species (columns in your wide matrix)
+species_names_pitfall <- colnames(pitfall_wide)
+
+for (sp in species_names_pitfall) {
+  # Remove the species (column)
+  reduced_matrix_pitfall <- pitfall_wide[, setdiff(species_names_pitfall, sp)]
+  
+  # Remove rows that are now completely zero
+  nonzero_rows_pitfall <- rowSums(reduced_matrix_pitfall) > 0
+  reduced_matrix_pitfall <- reduced_matrix_pitfall[nonzero_rows_pitfall, ]
+  reduced_env_pitfall <- pitfall_env[nonzero_rows_pitfall, ]
+  
+  # Skip iteration if data becomes too small or empty
+  if (nrow(reduced_matrix_pitfall) < 2 || anyNA(reduced_matrix_pitfall)) next
+  
+  # Run ANOSIM on the reduced matrix
+  anosim_result_pitfall <- anosim(wisconsin(sqrt(reduced_matrix_pitfall)), reduced_env_pitfall$Type, distance = "bray", permutations = 999)
+  
+  # Store R and change from base
+  R_val_pitfall <- anosim_result_pitfall$statistic
+  delta_R_pitfall <- base_R_pitfall - R_val_pitfall
+  jackknife_results_pitfall <- rbind(jackknife_results_pitfall, data.frame(Species = sp, R_value = R_val_pitfall, Delta_R = delta_R_pitfall))
+}
+
+# Sort by greatest impact (largest Delta_R)
+jackknife_results_pitfall <- jackknife_results_pitfall[order(-jackknife_results_pitfall$Delta_R), ]
+
+# Plot Jackknife Results
+pitfall_jk <- ggplot(jackknife_results_pitfall, aes(x = reorder(Species, Delta_R), y = Delta_R)) +
+  geom_col(fill = "#0072B2") +
+  coord_flip() +
+  labs(title = "Ground invertebrate Order impact on NMDS Clustering",
+       x = "Species Removed",
+       y = "Decrease in ANOSIM R") +
+  theme_minimal()
+
+
+ pitfall_jk
+ 
+ save_plot(pitfall_jk, "pitfall_jk")
+```
+
